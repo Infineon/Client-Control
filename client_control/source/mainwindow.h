@@ -1,0 +1,1440 @@
+/*
+ * (c) 2016-2026, Infineon Technologies AG, or an affiliate of Infineon
+ * Technologies AG. All rights reserved.
+ * This software, associated documentation and materials ("Software") is
+ * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
+ * and is protected by and subject to worldwide patent protection, worldwide
+ * copyright laws, and international treaty provisions. Therefore, you may use
+ * this Software only as provided in the license agreement accompanying the
+ * software package from which you obtained this Software. If no license
+ * agreement applies, then any use, reproduction, modification, translation, or
+ * compilation of this Software is prohibited without the express written
+ * permission of Infineon.
+ *
+ * Disclaimer: UNLESS OTHERWISE EXPRESSLY AGREED WITH INFINEON, THIS SOFTWARE
+ * IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * INCLUDING, BUT NOT LIMITED TO, ALL WARRANTIES OF NON-INFRINGEMENT OF
+ * THIRD-PARTY RIGHTS AND IMPLIED WARRANTIES SUCH AS WARRANTIES OF FITNESS FOR A
+ * SPECIFIC USE/PURPOSE OR MERCHANTABILITY.
+ * Infineon reserves the right to make changes to the Software without notice.
+ * You are responsible for properly designing, programming, and testing the
+ * functionality and safety of your intended application of the Software, as
+ * well as complying with any legal requirements related to its use. Infineon
+ * does not guarantee that the Software will be free from intrusion, data theft
+ * or loss, or other breaches ("Security Breaches"), and Infineon shall have
+ * no liability arising out of any Security Breaches. Unless otherwise
+ * explicitly approved by Infineon, the Software may not be used in any
+ * application where a failure of the Product or any consequences of the use
+ * thereof can reasonably be expected to result in personal injury.
+ */
+
+/*
+ * Sample MCU application for using WICED HCI protocol. Main app header file.
+ */
+
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
+
+#include <stdio.h>
+#include <QMainWindow>
+#include <QtSerialPort/QSerialPort>
+#include <QtSerialPort/QSerialPortInfo>
+#include <QComboBox>
+#include <QSettings>
+#include <QWaitCondition>
+#include <QSemaphore>
+#include <QMessageBox>
+#include <QThread>
+#include <QMutex>
+#include "serial_port.h"
+#include <QListWidget>
+#include <QElapsedTimer>
+
+#ifdef PCM_ALSA
+#include <alsa/asoundlib.h>
+#endif
+
+#ifdef Q_OS_WIN
+// some earlier versions of the Microsoft compiler do not support snprintf()
+// so we supply a custom funtion which is functionaly equivalent
+int ms_snprintf ( char * s, size_t n, const char * fmt, ... );
+#define snprintf(A,B,...) ms_snprintf (A,B,__VA_ARGS__)
+#endif
+
+#ifndef uint16_t
+typedef unsigned short uint16_t;
+typedef unsigned char  uint8_t;
+typedef unsigned int   uint32_t;
+#endif
+
+typedef unsigned long    DWORD;
+typedef unsigned char   BYTE;
+typedef unsigned char   UINT8;
+typedef unsigned short  UINT16;
+typedef unsigned int    UINT32;
+typedef unsigned char * LPBYTE;
+typedef unsigned short  USHORT;
+typedef int            BOOL;
+typedef unsigned long  ULONG;
+typedef wchar_t         WCHAR;
+typedef char            CHAR;
+typedef BYTE  BOOLEAN;
+#define FALSE   false
+#define TRUE    true
+typedef DWORD ULONG;
+typedef unsigned int UINT;
+typedef unsigned long DWORD_PTR;
+
+//#define UNUSED(x) (void)(x)
+
+#define STRING_START_BROADCAST "Start Broadcast"
+#define STRING_SYNC_TO_STREAM "Sync to Stream"
+#define STRING_DISCOVER_SOURCES "Discover Sources"
+#define STRING_STOP_DISCOVER "Stop Discovery"
+#define STRING_TERMINATE_STREAM "Terminate Stream"
+#define STRING_CALL_ON_HOLD "Call on hold....."
+#define STRING_ON_GOING_CALL "Ongoing call....."
+#define STRING_STOP_ADVERTISEMENT "Stop Adv"
+#define STRING_START_ADVERTISEMENT "Start Adv"
+#define STRING_PLAY "Play"
+#define STRING_PAUSE "Pause"
+#define STRING_MUTE "Mute"
+#define STRING_UNMUTE "Unmute"
+#define STRING_CONNECT "Connect"
+#define STRING_DISCONNECT "Disconnect"
+#define STRING_REMOTE_RETRIEVE "Remote Retrieve"
+#define STRING_REMOTE_HOLD "Remote Hold"
+
+
+#define CONNECTION_TYPE_NONE    0x0000
+#define CONNECTION_TYPE_AG      0x0001
+#define CONNECTION_TYPE_SPP     0x0002
+#define CONNECTION_TYPE_AUDIO   0x0004
+#define CONNECTION_TYPE_HF      0x0008
+#define CONNECTION_TYPE_HIDH    0x0010
+#define CONNECTION_TYPE_IAP2    0x0020
+#define CONNECTION_TYPE_LE      0x0040
+#define CONNECTION_TYPE_AVRC    0x0080
+#define CONNECTION_TYPE_AVK     0x0100
+#define CONNECTION_TYPE_PBC     0x0200
+#define CONNECTION_TYPE_BATTC   0x0400
+#define CONNECTION_TYPE_FINDMEL  0x0800
+#define CONNECTION_TYPE_OPS     0x1000
+#define CONNECTION_TYPE_PANU    0x2000
+
+#define NULL_HANDLE             0xFF
+#define LE_DWORD(p) (((DWORD)(p)[0]) + (((DWORD)(p)[1])<<8) + (((DWORD)(p)[2])<<16) + (((DWORD)(p)[3])<<24))
+
+#define A2DP_STATS // Audio date statitstics
+
+#define KEYRPT_SIZE     11
+#define KEYRPT_BUF_SIZE 12
+#define KEYRPT_MODIFIER 3
+#define KEYRPT_CODE     5
+
+typedef struct
+{
+    BYTE     *m_pAudioData;
+    BYTE     *m_pData;
+    DWORD     m_dwAudioDataLen;
+    DWORD     m_dwChunkLen;
+    DWORD     m_dwAudioSent;
+    DWORD     m_PacketsToSend; // incremented on receiving the message to send new buffers
+    DWORD     m_PacketsSent;   // incremented in the write thread
+    DWORD     m_BytesPerPacket;// received
+    QElapsedTimer m_timer_from_start;
+    QElapsedTimer m_timer_from_last;
+}hci_audio_sample_t;
+
+typedef struct{
+    const char * name;
+    uint32_t     data;
+}name_val_t;
+
+typedef struct
+{
+    uint8_t is_supported;
+    uint8_t coding_format;
+    uint16_t company_id;
+    uint16_t vendor_specific_codec_id;
+    uint8_t channel_cnt;
+    uint32_t sampling_frequency;
+    uint32_t frame_duration;
+    uint16_t min_ocpf;
+    uint16_t max_ocpf;
+    uint8_t codec_frames_per_sdu;
+}le_audio_codec_config_t;
+
+typedef struct
+{
+    uint8_t media_state;
+    uint8_t mic_state;
+    uint8_t bidir_mic_state;
+}le_audio_app_state_t;
+
+class Worker;
+// remote device information
+class CBtDevice
+{
+public:
+    CBtDevice (uint16_t conn_id, bool paired=false);
+    ~CBtDevice ();
+
+    UINT8 m_address[6];
+    UINT8  address_type;
+    UINT16 m_conn_type;
+    UINT16 m_audio_handle; // a2dp
+    UINT16 m_hf_handle;    // hf
+    UINT16 m_ag_handle;    // ag
+    UINT16 m_spp_handle;   // spp
+    UINT16 m_hidh_handle;  // hidh
+    UINT16 m_iap2_handle;  // iap2
+    UINT16 m_avrc_handle;  // avrc
+    UINT16 m_bsg_handle;   // bsg
+    UINT16 m_pbc_handle;   // pbc
+    UINT16 m_avk_handle;   // avk
+    UINT16 m_battc_handle; // battc
+    UINT16 m_findmel_handle; // findme
+    UINT16 m_mce_handle;     // mce
+    UINT16 m_panu_handle;    // panu
+    UINT8  role;
+
+    char m_name[100];
+    bool m_bIsLEDevice;
+    bool m_bIsAncsConnected;
+    bool m_bIsAmsConnected;
+    QByteArray m_nvram;
+    int m_nvram_id;
+    bool m_paired;
+
+    char  m_bd_string[20];
+    le_audio_codec_config_t source_supported_config[16];
+    le_audio_codec_config_t sink_supported_config[16];
+
+    le_audio_app_state_t le_audio_state;
+    QMap<uint32_t, QString> aics_des;
+    QMap<uint8_t, QString> preset_rec;
+
+    char * get_bdaddr_string(void);
+
+    void set_connection_in_progress(bool in_progress);
+    bool connect_in_progress(void);
+    void set_connection_handle(uint16_t con_handle);
+    uint16_t get_connection_handle();
+    void set_app_ready_status(bool ready);
+    bool is_app_status_ready();
+
+    void handle_le_disconnect(void);
+    void le_audio_handle_connection(void);
+
+private:
+    bool m_connect_in_progress;
+    bool m_app_status_ready;
+    UINT16 m_con_handle;
+
+};
+
+
+// Main app
+namespace Ui {
+class MainWindow;
+}
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    explicit MainWindow(QStringList args, QWidget *parent = nullptr );
+    ~MainWindow();
+
+    QString m_SettingsFile;
+
+    int ExtractCmdlineArgs(const QStringList &args);
+
+    void closeEvent (QCloseEvent *event);
+    void showEvent(QShowEvent *ev);
+    void HandleDeviceEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void Log(const char * tr,...);
+    void DumpData(char *description, void* p, unsigned int length, unsigned int max_lines);
+    BYTE ProcNibble (char n);
+    USHORT GetHandle(QString &str);
+    DWORD GetHexValue(LPBYTE buf, DWORD buf_size, QString &str);
+
+    char * GetCurrentWorkingDirectory();
+    DWORD qtmin(DWORD len, DWORD bufLen);
+
+    // Device manager
+    QMessageBox dl_msgbox;
+    void WriteNVRAMToDevice(bool bBLEDevice);
+    int FindBaudRateIndex(int baud);
+    void setDevName(char * dev_name);
+    void setDevBda(BYTE* bda);
+    void setPairingMode();
+    void setVis();
+    WicedSerialPort *m_CommPort;
+    int errorNumber();
+    bool m_bPortOpen ;
+    bool m_bPeripheralUart;
+    bool SetupCommPort();
+    bool SendWicedCommand(unsigned short command, unsigned char * payload, unsigned int len);
+    int PortWrite(unsigned char * data, DWORD Length);
+    void InitDm();
+    void closeEventDm (QCloseEvent *event);
+    void HandleDeviceEventsDm(DWORD opcode, LPBYTE p_data, DWORD len);
+    void DecodeEIR(LPBYTE p_data, DWORD len, char * szName, int name_len);
+    void EnableUI(bool bEnable);
+    void EnableTabs(UINT8 feature, bool bEnable);
+    bool m_bUIEnabled;
+    void CloseCommPort();
+    void ClearPort();
+    QWaitCondition serial_read_wait;
+    bool m_scan_active;
+    bool m_inquiry_active;
+    void GetVersion();
+    void HandleDeviceEventsMisc(DWORD opcode, LPBYTE p_data, DWORD len);
+    void misc_handle_app_status_events(BYTE *p_data, DWORD len);
+    UINT8 m_major;
+    UINT8 m_minor;
+    UINT8 m_rev;
+    UINT32 m_build;
+    uint32_t m_chip;
+    UINT16 m_features;
+    QStringList m_strComPortsIDs;
+    QIcon m_paired_icon;
+    QSettings m_settings;
+    FILE * m_fp_logfile;
+    bool m_b_app_init;
+    void VirtualUnplug(CBtDevice *pDev);
+    void Startup();
+
+    // HCI Firmware Update
+    void onHandleWicedEventHciDfu(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    bool FirmwareDownloadStart(QString filename);
+    void FirmwareDownloadStop();
+    void FirmwareDownloadSendCmd(UINT8 cmd, void * p_data, int len);
+    void FirmwareDownloadSendData();
+    void FirmwareDownloadCleanUp();
+    void FirmwareDownloadTimeout();
+    FILE * m_fpDownload;
+    UINT32 m_nFirmwareSize;
+    UINT32 m_nFirmwareSentSize;
+    UINT32 m_nDownloadSectorSize;
+    UINT32 m_nDownloadCRC;
+    QTimer *m_pDownloadTimer;
+
+    /* BDA related */
+    int ReadBDAFromStream(uint8_t *p_dest, uint8_t *p_src);
+    void sprintfBDA(QString &bda, uint8_t *p_bda);
+
+    void HandleA2DPEvents(DWORD opcode, DWORD len, BYTE *p_data);
+    CBtDevice *AddDeviceToList(BYTE *addr, QComboBox * pCb, char * bd_name=nullptr,bool bPaired=false);
+    CBtDevice * FindInList(BYTE * addr, QComboBox * pCb);
+    CBtDevice * FindInList(UINT16 conn_type, UINT16 handle, QComboBox * pCb);
+    void SelectDevice(QComboBox* cb, BYTE * bda);
+    CBtDevice * GetSelectedDevice();
+    CBtDevice * GetSelectedLEDevice();
+    CBtDevice * GetDevice();
+    void ResetDeviceList(QComboBox *cb);
+    void onHandleWicedEventDm(unsigned int opcode, unsigned char*p_data, unsigned int len);
+    void SetDevicePaired(BYTE * info, int len=6);
+    void HidHostDeviceAdd(BYTE * bda);
+    void HidHostDeviceRemove(BYTE * bda);
+    void SendHidHostAdd(void);
+    void SendBattCAdd(void);
+    void BattCDeviceAdd(BYTE * bda);
+    void BattCDeviceRemove(BYTE * bda);
+    void FindMeLocatorDeviceAdd(BYTE * bda);
+    void FindMeLocatorDeviceRemove(BYTE * bda);
+    void SendFindMeLocatorAdd(void);
+
+    BOOL SendLaunchRam();
+    BOOL SendDownloadMinidriver();
+    void downlWoad(FILE * fHCD);
+    void SendRecvCmd(BYTE *arHciCommandTx, int tx_sz, BYTE *arBytesExpectedRx, int rx_sz);
+    DWORD ReadCommPort(BYTE *lpBytes, DWORD dwLen, QSerialPort * m_CommPort);
+    void ReadDevicesFromSettings(const char *group, QComboBox *cbDevices, QPushButton *btnUnbond);
+
+    void DisableBluetoothClassic();
+    void UpdateLEAudioRole();
+    void UpdateLEAudioDevice(BOOL is_connected, BYTE *addr, uint16_t conn_id);
+    void initCodecConfigOptions(QComboBox *p_box, const name_val_t *p_options, int num, int enable);
+    void init_le_audio_player_codec_config_options(int enable);
+    void init_le_audio_player_bis_codec_config_options(int enable);
+    void initWidgets(QWidget **p_list, int num, int enable, int hide); // enables a widget list
+    void InitLeAudioHeadsetMediaControl(int enable);
+    void InitLeAudioHeadsetAdvControl(int enable);
+    void InitLeAudioVolumeControl(int enable);
+    void InitLeAudioMicrophoneControl(int enable);
+    void InitLeAudioHeadsetBroadcastSink(int enable);
+    void InitLeAudioHeadsetCallControl(int enable);
+
+    void InitLeAudioPlayerMediaControl(int enable);
+    void InitLeAudioMICControl(int enable);
+    void InitLeAudioPlayerBiDirMICControl(int enable);
+    void InitLeAudioPlayerCallControlSetup(int enable);
+    void InitLeAudioPlayerCallControls(int enable);
+    void InitLeAudioPlayerCallControlAudioConfig(int enable);
+    void InitLeAudioPlayerBroadcastSource(int enable);
+    void InitLeAudioPlayeMICControls(int enable);
+    void InitLEAudioPlayerHAPControl(int enable);
+
+    void InitLeAudioBroadcastAssistant(int enable);
+
+    void InitLeAudioRemoteControlMediaControl(int enable);
+    void InitLeAudioRemoteControlCallControlSetup(int enable);
+    void InitLeAudioRemoteControlCallControls(int enable);
+
+    QString add_text_with_delimiter(QString text, QString add, QString delimiter);
+    void le_audio_ba_handle_add_bcast_source(int add_stream, int with_past);
+
+
+    // command line
+    QString str_cmd_port;
+    QString str_cmd_baud;
+    int iSpyInstance = 0;
+    QString str_cmd_ip_addr = "127.0.0.1";
+    int cmd_ip_addr_port = 0;
+    bool m_use_host_mode;
+
+    // Scripting support
+    bool scripting;
+    QThread* m_script_read_thread;
+    Worker* m_script_read_worker;
+    void CreateScriptThread();
+    QMutex m_script_write;
+    int CallWicedHciApi(UINT8 *data, UINT8 len);
+
+    // Serial port read
+    QThread* m_port_read_thread;
+    Worker* m_port_read_worker;
+    void CreateReadPortThread();
+    QMutex m_write;
+
+    // Startup timer
+    QTimer *m_dmStartupTimer;
+
+    // audio source
+    void set_audio_started_status(bool started);
+    void set_audio_connected_status(bool started);
+
+    bool m_audio_connected;
+    bool m_audio_started;
+    bool m_audio_i2s_input_enable;
+    bool m_audio_mp3_format_enable;
+    uint8_t m_audio_format;     /* 0: Wav    1: MP3 */
+    int m_audio_play_status_send_limit_count;
+    int m_audio_play_status_send_limit_counter;
+#ifdef A2DP_STATS
+    int m_audio_total_sent_pkt_count;
+#endif
+
+    bool m_volMute;
+    FILE * m_fpAudioFile;
+    hci_audio_sample_t m_uAudio;
+    void InitAudioSrc();
+    void closeEventAudioSrc(QCloseEvent *event);
+    void onHandleWicedEventAudioSrc(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleDeviceEventsAudioSrc(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleA2DPEventsAudioSrc(DWORD opcode, LPBYTE p_data, DWORD len);
+    void setAudioSrcUI();
+    BYTE * ExecuteSetAudioFile();
+    void HandleA2DPAudioRequestEvent(BYTE * pu8Data, DWORD len);
+    CBtDevice* GetConnectedAudioSrcDevice();
+    BYTE* GetAudioDataDataChunk(BYTE *pWavData, DWORD dwWavDataLen, DWORD *pdwDataLen);
+    BYTE * ExecuteSetAudioFile(char *pcFileName);
+    BYTE* ReadFile(const char* FilePathName, DWORD *pdwWavDataLen);
+    bool InitializeAudioFile(QString file_name);
+    int GetSamplingFrequencyValue(int index);
+    QMutex m_audio_packets;
+    QWaitCondition audio_tx_wait;
+
+    // Audio source dual A2DP
+    bool m_audio_connected_dual_a2dp;
+    bool m_audio_started_dual_a2dp;
+    bool m_audio_i2s_input_enable_dual_a2dp;
+    bool m_audio_mp3_format_enable_dual_a2dp;
+    int m_audio_play_status_send_limit_count_dual_a2dp;
+    int m_audio_play_status_send_limit_counter_dual_a2dp;
+    int m_audio_connected_num_dual_a2dp;
+    void InitAudioSrc_DualA2DP();
+    void closeEventAudioSrc_DualA2DP(QCloseEvent *event);
+    void onHandleWicedEventAudioSrc_DualA2DP(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleDeviceEventsAudioSrc_DualA2DP(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleA2DPEventsAudioSrc_DualA2DP(DWORD opcode, LPBYTE p_data, DWORD len);
+    void setAudioSrcUI_DualA2DP();
+    void HandleA2DPAudioRequestEvent_DualA2DP(BYTE * pu8Data, DWORD len);
+    bool InitializeAudioFile_DualA2DP();
+    BYTE* GetAudioDataDataChunk_DualA2DP(BYTE *pWavData, DWORD dwWavDataLen, DWORD *pdwDataLen);
+    BYTE* ExecuteSetAudioFile_DualA2DP(char *pcFileName);
+    int GetSamplingFrequencyValue_DualA2DP(int index);
+    CBtDevice* GetConnectedAudioSrcDevice_DualA2DP();
+
+    // Hands-free
+    void InitHF();
+    void onHandleWicedEventHF(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleHFEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void SendAtCmd(int nAtCmd, int num, char *atStr);
+    CBtDevice* GetConnectedHFDevice();
+    bool m_audio_connection_active;
+    int m_mic_cur_pos;
+    int m_speaker_cur_pos;
+
+    // SPP
+    void InitSPP();
+    void onHandleWicedEventSPP(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleSPPEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    DWORD SendFileThreadSPP();
+    CBtDevice* GetConnectedSPPDevice();
+    DWORD   m_spp_bytes_sent;
+    DWORD   m_spp_total_to_send;
+    BYTE    m_spp_tx_complete_result;
+    FILE   *m_spp_receive_file;
+    DWORD m_hSppTxCompleteEvent;
+    QWaitCondition spp_tx_wait;
+
+    QThread* m_thread_spp;
+    Worker* m_worker_spp;
+
+    // AG
+    void InitAG();
+    void onHandleWicedEventAG(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleAgEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    int ag_get_volume(char *str, int len);
+    bool m_ag_connection_active;
+    CBtDevice* GetConnectedAGDevice();
+
+    // BLE/BR HID Device
+    void InitBLEHIDD();
+    void onHandleWicedEventBLEHIDD(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleBLEHIDDEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void btnBLEHIDSendKeyInit();
+    void btnBLEHIDSendKey();
+    bool btnBLEHIDSendKeyRelease(BYTE c, QPushButton * button);
+    void btnBLEHIDSendKeyDown(BYTE c, QPushButton * button);
+    void btnBLEHIDSendKeyUp(BYTE c, QPushButton * button);
+    void btnBLEHIDSendMedia(BYTE c, bool pressed, QPushButton * button);
+    void setHIDD_buttonColor(QPushButton * button, const QColor &color);
+    void UpdateHIDD_ui_host();
+    void UpdateHIDD_ui_pairing();
+    void setHIDD_HostAddr(unsigned char * ad);
+    void setHIDD_linkChange(unsigned char * ad, bool cn);
+    void stop_AudioRawFileSend();
+    void send_AudioRawData(unsigned int count);
+    void send_audio_file(const char * filename);
+    void play_audio_file(const char * filename, uint32_t sample_rate );
+    bool m_b_is_hidd;
+    BYTE m_pairing_mode;
+    unsigned char m_host_ad[6];
+    BYTE keyRpt_buf[KEYRPT_BUF_SIZE];
+    bool m_host_valid;
+    bool m_connected;
+    BYTE m_host_type;
+    FILE * m_hiddAudioRaw_fp;
+    FILE * m_hiddAudioRaw_write_fp;
+    unsigned char m_device_capability_audio, m_device_capability_ir, m_device_capability_motion, m_device_capability_ull;
+    unsigned int m_audioRawDataSize, m_audioRawDataCurrentSize, m_audioRawDataWrSize;
+
+    // HID Host
+    void HidhVirtualUnplug(uint16_t handle);
+    void setRadioHIDH_BLE(int ble);
+    void InitHIDH();
+    void onHandleWicedEventHIDH(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleHIDHEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void DumpMemory(BYTE * p_buf, int length);
+    CBtDevice* GetConnectedHIDHDevice();
+    CBtDevice* GetSelectedHIDDevice();
+    void HandleHidHAudioStart(LPBYTE p_data, DWORD len);
+    void HandleHidHAudioStop(LPBYTE p_data, DWORD len);
+    void HandleHidHAudioRxData(LPBYTE p_data, DWORD len);
+    const char * hidd_media_key_str(BYTE c);
+    bool m_hidh_wakeup_state;
+    bool m_hidh_audio_started;
+    bool m_hidh_audio_configured;
+#ifdef PCM_ALSA // HID Host Audio based on Linux ALSA API
+    snd_pcm_t *m_alsa_handle;
+#endif
+    uint8_t m_nb_channel;
+
+// HID Host Audio based on Win32 media player API
+#ifdef Q_OS_WIN32
+    void WaveOutCallback(UINT uMsg, DWORD_PTR dwParam1);
+#define WAVE_HDR_NB                 2
+#define WAVE_HDR_BUFFER_SIZE        1000
+    uint8_t WaveOutHeaderBuffer[WAVE_HDR_NB][WAVE_HDR_BUFFER_SIZE];
+    uint8_t WaveOutBuffer[WAVE_HDR_BUFFER_SIZE * 6];
+    int WaveOutBufferIn;
+    int WaveOutBufferOut;
+    int WaveOutBufferNb;
+#endif
+
+    // IFX-Voice Host
+    void InitIFXVH();
+    void onHandleWicedEventIFXVH(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    FILE * m_ifxv_AudioRaw_fp;
+    unsigned int m_ifxv_audioRawDataWrSize;
+    uint8_t m_ifxv_connected;
+
+    // AVRC CT
+    void InitAVRCCT();
+    void onHandleWicedEventAVRCCT(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleDeviceEventsAVRCCT(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleAVRCControllerEvents(DWORD opcode, BYTE *p_data, DWORD len);
+    void setAVRCCTUI();
+    CBtDevice* GetConnectedAVRCDevice();
+
+    // AVRC TG
+    void InitAVRCTG();
+    void onHandleWicedEventAVRCTG(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleDeviceEventsAVRCTG(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleAVRCTargetEvents(DWORD opcode, BYTE *p_data, DWORD len);
+    void setAVRCTGUI();
+
+    void SetTrack();
+    void TrackInfo();
+    void PlayerStatus();
+
+    int m_current_volume_pct;
+    uint32_t m_current_song_pos;
+    uint16_t m_tg_play_status_timeout_ms;
+
+    //GATT
+    void InitGATT();
+    void onHandleWicedEventGATT(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleLEEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleGattEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void setGATTUI();
+    USHORT GetConHandle(QComboBox *pCombo);
+    QString GetServiceUUIDDesc(uint16_t uuid16);
+    QString GetServiceUUIDDesc(uint8_t *p_uuid128);
+
+    void  SetRole(CBtDevice *pDevice, uint8_t role);
+    UINT8 GetRole(CBtDevice *pDevice);
+    void UpdateGattButtons(CBtDevice *pDevice);
+    void on_LeConnectPressed(QString text);
+    BOOL  m_advertisments_active;
+    ULONG m_notification_uid;
+#define EVENT_ID_NOTIFICATION_ADDED     0
+#define EVENT_ID_NOTIFICATION_MODIFIED  1
+#define EVENT_ID_NOTIFICATION_REMOVED   2
+
+#define EVENT_FLAG_IMPORTANT            (1 << 1)
+    ULONG m_notification_flags;
+
+    // BSG
+    void InitBSG();
+    void onHandleWicedEventBSG(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleBSGEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    DWORD SendFileThreadBSG();
+    CBtDevice* GetConnectedBSGDevice();
+    DWORD   m_bsg_bytes_sent;
+    DWORD   m_bsg_total_to_send;
+    BYTE    m_bsg_tx_complete_result;
+    FILE   *m_bsg_receive_file;
+    DWORD m_hBsgTxCompleteEvent;
+    QWaitCondition bsg_tx_wait;
+
+    USHORT  m_bsg_sent;
+    USHORT  m_bsg_acked;
+    DWORD   m_uart_tx_size;
+
+    // PBC
+    void InitPBC();
+    void onHandleWicedEventPBC(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void wiced_bt_pbc_pb_save(UINT8* p_buffer, int len);
+    void wiced_bt_pbc_process_pb_event(LPBYTE p_data, DWORD len);
+    void HandlePBCEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    CBtDevice* GetConnectedPBCDevice();
+    bool m_pbc_connection_active;
+    bool m_pbc_file_remove;
+
+    // HomeKit
+    void InitHK();
+    void StartHK();
+    void onHandleWicedEventHK(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleHkEvent(DWORD opcode, LPBYTE p_data, DWORD len);
+    void SendHciCommand(UINT16 command, USHORT handle, LPBYTE p, DWORD dwLen);
+
+    void SetLightOnOff(BOOL on);
+    void UpdateUI(USHORT handle, LPBYTE p, DWORD dwLen);
+    void ShowMessage();
+    bool m_bLightOn;
+    uint m_nLightBrightness;
+    uint m_nDoorState;
+    uint m_nLockState;
+    uint m_nLockTargetState;
+    uint m_nIdentifyTimerCounter;
+    QTimer *p_timer;
+    USHORT m_hIdentify;
+    USHORT m_hLightOn;
+    USHORT m_hLightBrightness;
+    USHORT m_hDoorState;
+    USHORT m_hLockState;
+    USHORT m_hLockTargetState;
+
+    // iAP2
+    void InitiAP2();
+    void onHandleWicedEventiAP2(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleiAP2PEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    DWORD SendFileThreadiAP2();
+    CBtDevice* GetConnectediAP2Device();
+
+    DWORD   m_iap2_bytes_sent;
+    DWORD   m_iap2_total_to_send;
+    BYTE    m_iap2_tx_complete_result;
+    FILE    *m_iap2_receive_file;
+    DWORD   m_hiap2TxCompleteEvent;
+    QWaitCondition iap2_tx_wait;
+
+    // audio sink
+    void InitAudioSnk();
+    void onHandleWicedEventAudioSnk(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleA2DPEventsAudioSnk(DWORD opcode, BYTE *p_data, DWORD len);
+    CBtDevice* GetConnectedAudioSnkDevice();
+
+    // GATT DB
+    void InitGATT_DB();
+    void onHandleWicedEventGATT_DB(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleGATT_DBEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleGattReadRequestEvent(LPBYTE p_data, DWORD len);
+    void HandleGattWriteRequestEvent(LPBYTE p_data, DWORD len);
+
+    // Battery Client
+    void InitBATTC(void);
+    void onHandleWicedEventBATTC(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleBATTCHEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    CBtDevice* GetConnectedBATTCDevice(void);
+
+    // Demo
+    void InitDemo();
+    void onHandleWicedEventDemo(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleDemoEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void ConnectWiFi(BYTE *ssid, BYTE *password);
+
+    // FindMe Locator
+    void InitFINDMEL(void);
+    void onHandleWicedEventFINDMEL(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleFINDMELHEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    CBtDevice* GetConnectedFINDMELDevice(void);
+
+    // OPS
+    void InitOPS();
+    void onHandleWicedEventOPS(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleOPSEvents(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    CBtDevice* GetConnectedOPSDevice();
+    FILE *m_opp_receive_file;
+    DWORD received_size;
+
+    // ANP
+    void InitANP();
+    void onHandleWicedEventANP(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandleANCEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+    void HandleANSEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+
+    //LE COC
+    void InitLecoc();
+    DWORD SendFileThreadLECOC();
+    void recvDataFromDevice(char *p_data, unsigned int len);
+    void rcvdTxCompleteFromDevice(void);
+    void stopAdv(void);
+    void onHandleWicedEventLECOC(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void on_cbLecocReceiveFile_clicked(bool checked);
+
+    DWORD   m_lecoc_bytes_sent;
+    DWORD   m_lecoc_total_to_send;
+    BYTE    m_lecoc_tx_complete_result;
+    FILE   *m_lecoc_receive_file;
+
+    //LED Demo
+    int m_led_brightness_level;
+
+    //OTP Client
+    void InitOTPClient();
+    DWORD SendOTAImageFileThreadOTPClient();
+    void onHandleWicedEventOTPClient(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void rcvdTxCompleteFromOTPClientDevice();
+    void rcvdUpgradeInitDoneFromOTPClientDevice();
+
+    DWORD   m_otpc_bytes_sent;
+    DWORD   m_otpc_total_to_send;
+    DWORD   m_otpc_crc32;
+    BYTE    m_otpc_tx_complete_result;
+    QWaitCondition otpc_tx_wait;
+
+    // Test hci loopback
+    void onHandleWicedEventHciLoopback(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void InitHciLoopbackTest();
+    void StartHciLoopbackTest();
+    void StopHciLoopbackTest();
+    void ConfigHciLoopbackTest();
+    void HciLoopbackSendCmd(UINT8 cmd, void * p_data, unsigned int len);
+    bool m_hci_test_is_active;
+
+    //MAP Client
+    void InitMAPClient();
+    void onHandleWicedEventMAPClient(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void onHandleMceMasInstances(unsigned char *p_data, unsigned int len);
+    void onHandleMceConnected(unsigned char *p_data, unsigned int len);
+    void onHandleMceDisconnected(unsigned char *p_data, unsigned int len);
+    void onHandleMceFolderSet(unsigned char *p_data, unsigned int len);
+    void onHandleMceFolderList(unsigned char *p_data, unsigned int len);
+    void onHandleMceMessageList(unsigned char *p_data, unsigned int len);
+    void onHandleMceMessage(unsigned char *p_data, unsigned int len);
+    void onHandleMceMessagePushed(unsigned char *p_data, unsigned int len);
+    void onHandleMceMessageStatusSet(unsigned char *p_data, unsigned int len);
+    void onHandleMceNotifReg(unsigned char *p_data, unsigned int len);
+    void onHandleMceNotif(unsigned char *p_data, unsigned int len);
+    void HelperRegisterNotification(bool reg);
+
+    //PANU
+    void InitPANU();
+    CBtDevice* GetConnectedPANUDevice();
+    void onHandleWicedEventPANU(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void HandlePANUEvents(DWORD opcode, LPBYTE p_data, DWORD len);
+
+    QString m_mce_set_folder;
+    QString m_mce_cur_folder;
+    QString m_mce_rcvd_text;
+    int m_mce_msg_type;
+    QString m_mce_push_message;
+    UINT16 m_mce_list_offset;
+    bool m_mce_notif_registered;
+    QListWidgetItem *m_mce_delete_item;
+
+    //LE Audio Demo
+    bool is_le_audio_headset();
+    bool is_le_audio_player();
+    bool is_le_remote_control();
+    void InitUnicastSink();
+    void LogMediaState(int state);
+    void le_audio_handle_update_mute_state(int state);
+    void handle_bt_le_audio_muteUnmute_btn(QPushButton *p_btn);
+    void handle_le_audio_volUpDown_clicked_btn(int cmd);
+    void handle_le_audio_absVol_btn(QString absVol_str);
+    void onHandleWicedEventLeAudio(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void le_audio_handle_audio_events(DWORD opcode, BYTE *rx_buf, DWORD len);
+    void le_audio_handle_le_events(DWORD opcode, BYTE *rx_buf, DWORD len);
+    CBtDevice *AddDeviceToListLeAudio(BYTE *addr, QComboBox * pCb, char * bd_name=nullptr,uint16_t conn_id=0);
+    QByteArray le_audio_get_broadcast_code(QString code);
+    void le_audio_start_app();
+
+    // RAS demo
+    void onHandleWicedEventRas(unsigned int opcode, unsigned char *p_data, unsigned int len);
+    void ras_handle_ranging_data_events(DWORD opcode, BYTE *rx_buf, DWORD len);
+    void ras_handle_le_events(DWORD opcode, BYTE *rx_buf, DWORD len);
+
+signals:
+   void HandleWicedEvent(unsigned int opcode, unsigned int len, unsigned char *p_data);
+   void HandleTrace(QString *pTrace);
+   void HandleLeAdvState(BYTE val);
+   void ScrollToTop();
+   void ListClear();
+
+
+   // PBC
+    void ShowPhonebookData();
+
+public slots:
+    void startUpTimer();
+
+   // utility methods
+   void processTrace(QString * trace);
+   void processClear();
+   void processScrollToTop();
+   void onMsgBoxButton(QAbstractButton*btn);
+   void onClear();
+   void btnFindLogfileClicked();
+   void btnLogToFileClicked(bool);
+   void btnAddTraceClicked();
+   void EnableAppTraces();
+   void DisableAppTraces();
+   void handleReadyRead();
+   void serialPortError(QSerialPort::SerialPortError error);
+   void le_audio_reset_ui();
+   void ras_reset_ui();
+   void le_audio_add_broadcast_stream_to_list(QComboBox *cb, uint32_t broadcast_id, QString br_name);
+   void le_audio_handle_scan_bcastStreams_click(QPushButton *p_btn, QComboBox *p_streams);
+
+    // Device manager
+    void processHandleLeAdvState(BYTE val);
+    void btnClearClicked();
+    void onHandleWicedEvent(unsigned int opcode, unsigned int len, unsigned char *p_data);
+    void onStartDisc();
+    void onStopDisc();
+    void onReset();
+    void OnBnClickedBREDRUnbond();
+    void OnBnClickedLeUnbond();
+    void onUnbond(QComboBox* cb);
+    void onDevChange(QString);
+    void onLEDevChange(QString);
+    void onDiscoverable(bool);
+    void onConnectable(bool);
+    void onPairable(bool);
+    void on_btnOpenPort_clicked();
+    void onDlProgress(QString *msg, int pktcnt, int bytecnt);
+    void onDlDone(const QString &s);
+    void onDownload();
+    void onFindPatchFile();
+    void OnBnClickedVersionInfo();
+
+    // AV source
+    void onDisconnectAudioSrc();
+    void onConnectAudioSrc();
+    void onFindAudioFile();
+    void onStartAudio();
+    void onStopAudio();
+    void onAudioSrcSine(bool);
+    void onAudioSrcFile(bool);
+    void onAudioSrcI2S(bool);
+    void onAudioFileFormatWav(bool);
+    void onAudioFileFormatMp3(bool);
+
+    // AV source dual A2DP
+    void onDisconnectAudioSrc_DualA2DP();
+    void onConnectAudioSrc_DualA2DP();
+    void onFindAudioFile_DualA2DP();
+    void onStartAudio_DualA2DP();
+    void onStopAudio_DualA2DP();
+    void onAudioSrcSine_DualA2DP(bool);
+    void onAudioSrcFile_DualA2DP(bool);
+    void onAudioSrcI2S_DualA2DP(bool);
+    void onAudioFileFormatWav_DualA2DP(bool);
+    void onAudioFileFormatMp3_DualA2DP(bool);
+
+    // Hands-free
+    void on_btnConnectHF_clicked();
+    void on_btnDisconnectHF_clicked();
+    void on_btnHFConnectAudio_clicked();
+    void on_btnHFHangup_clicked();
+    void on_btnHFAnswer_clicked();
+    void on_btnHFRedial_clicked();
+    void on_btnHFDial_clicked();
+    void on_btnHFDTMF_clicked();
+    void on_btnHFVoiceReco_clicked();
+    void on_btnHFCallHeld_clicked();
+    void on_horizontalSliderHFMic_sliderMoved(int position);
+    void on_horizontalSliderHFSpeaker_sliderMoved(int position);
+    void on_btnHFBtnPress_clicked();
+    void on_btnHFLongBtnPress_clicked();
+    void on_btnHFActiveCalls_clicked();
+    void on_btnHFNREC_clicked();
+    void on_btnHFCNUM_clicked();
+    void on_btnHFBINP_clicked();
+    void on_btnHFUpdate_ind_clicked();
+    void on_btnHFBIA_clicked();
+
+    // SPP
+    void on_btnSPConnect_clicked();
+    void on_btnSPPDisconnect_clicked();
+    void on_btnSPPSend_clicked();
+    void on_btnSPPBrowseSend_clicked();
+    void on_btnSPPBrowseReceive_clicked();
+    void on_cbSPPSendFile_clicked(bool checked);
+    void on_cbSPPReceiveFile_clicked(bool checked);
+    void on_cbSPPThreadComplete();
+
+    // AG
+    void on_btnAGConnect_clicked();
+    void on_btnAGDisconnect_clicked();
+    void on_btnAGAudioConnect_clicked();
+    void on_comboBoxAGCallID_1_currentIndexChanged(int index);
+    void on_comboBoxAGCallID_2_currentIndexChanged(int index);
+    void on_comboBoxAGHeldCall_currentIndexChanged(int index);
+    void on_comboBoxAGCallSetup_currentIndexChanged(int index);
+    void on_comboBoxAGCallStatus_currentIndexChanged(int index);
+    void on_comboBoxAGBattLevel_currentIndexChanged(int index);
+    void on_comboBoxAGService_currentIndexChanged(int index);
+    void on_comboBoxAGSignal_currentIndexChanged(int index);
+    void on_comboBoxAGCallSpkVol_currentIndexChanged(int index);
+    void on_comboBoxAGCallMicVol_currentIndexChanged(int index);
+    void handle_ag_call_status_update();
+    void handle_ag_send_ciev_command(int id, int index);
+    void on_btnAGRing_clicked();
+    void on_btnAGCCWA_clicked();
+    void on_btnAGOK_clicked();
+    void on_btnAGError_clicked();
+
+    // HID Device
+    void on_btnBLEHIDSendReport_clicked();
+    void on_btnBLEHIDPairingMode_clicked();
+    void on_btnBLEHIDConnectDisconnect_clicked();
+    void on_btnBLEHIDDVirtualUnplug_clicked();
+    void on_cbBLEHIDCapLock_clicked();
+    void on_cbBLEHIDCtrl_clicked();
+    void on_cbBLEHIDAlt_clicked();
+
+    // HID Host
+    void on_btnHIDHConnect_clicked();
+    void on_btnHIDHDisconnect_clicked();
+    void on_btnHIDHGetDesc_clicked();
+    void on_cbHIDHProtocol_currentIndexChanged(int index);
+    void on_btnHIDHWakeAdd_clicked();
+    void on_btnHIDHWakeEnable_clicked();
+    void on_radioHIDHBLE_clicked();
+    void on_radioHIDHBREDR_clicked();
+    void on_btnHIDHGetReport_clicked();
+    void on_btnHIDHSetReport_clicked();
+
+    //AVRCP CT
+    void onCTPlay();
+    void onCTPause();
+    void onCTStop();
+    void onCTNext();
+    void onCTPrevious();
+    void onCTVolumeUp();
+    void onCTVolumeDown();
+    void onCTMute();
+    void onCTConnect();
+    void onCTDisconnect();
+    void onCTSkipForwardPressed();
+    void onCTSkipForwardReleased();
+    void onCTSkipBackwardPressed();
+    void onCTSkipBackwardReleased();
+    void onCTUnitInfo();
+    void onCTSubUnitInfo();
+    void onCTRepeatMode(int index);
+    void onCTShuffleMode(int index);
+    void cbCTVolumeChanged(int index);
+    void on_cbTGVolume_currentIndexChanged(int index);
+    void on_btnAVRCTBtnPress_clicked();
+    void on_btnAVRCTLongBtnPress_clicked();
+
+    // AVRCP TG
+    void onTGPlay();
+    void TGPlay();
+    void onTGPause();
+    void onTGStop();
+    void TGStop();
+    void onTGNext();
+    void onTGPrevious();
+    void onTGConnect();
+    void onTGDisconnect();
+    void onTGRegisterNotification();
+    void oncbTGShuffleCurrentIndexChanged(int index);
+    void oncbTGRepeatCurrentIndexChanged(int index);
+    void onTGMute();
+    void on_btnTGDeselectTrack_clicked();
+
+    //GATT
+    void OnBnClickedAncsPositive();
+    void OnBnClickedAncsNegative();
+
+    void OnBnClickedDiscoverDevicesStart();
+    void OnBnClickedDiscoverDevicesStop();
+    void OnBnClickedLeConnect();
+    void OnBnClickedLeCancelConnect();
+    void OnBnClickedLeDisconnect();
+    void OnBnClickedDiscoverServices();
+    void OnBnClickedDiscoverCharacteristics();
+    void OnBnClickedDiscoverDescriptors();
+    void OnBnClickedStartStopAdvertisements();
+    void OnBnClickedSendNotification();
+    void OnBnClickedSendIndication();
+    void OnBnClickedCharacteristicRead();
+    void OnBnClickedCharacteristicWrite();
+    void OnBnClickedCharacteristicWriteWithoutResponse();
+
+    //BSG
+    void on_btnBSGSend_clicked();
+    void on_btnBSGBrowseSend_clicked();
+    void on_btnBSGBrowseReceive_clicked();
+    void on_cbBSGSendFile_clicked(bool checked);
+    void on_cbBSGReceiveFile_clicked(bool checked);
+    void on_cbBSGThreadComplete();
+
+    // PBC
+    void on_btnPBCConnect_clicked();
+    void on_btnPBCDisconnect_clicked();
+    void on_btnPBCAbort_clicked();
+    void on_btnPBCPhonebook_clicked();
+    void on_btnPBCCallHistory_clicked();
+    void on_btnPBCICCall_clicked();
+    void on_btnPBCOCCalls_clicked();
+    void on_btnPBCMissedCalls_clicked();
+    void on_ShowPhonebookData();
+
+    // HomeKit
+    void on_btnHKRead_clicked();
+    void on_btnHKWrite_clicked();
+    void on_btnHKList_clicked();
+    void on_btnHKSwitch_clicked();
+    void on_btnHKSet_clicked();
+    void on_cbDoorState_currentIndexChanged(int index);
+    void on_cbLockState_currentIndexChanged(int index);
+    void on_cbLockTargetState_currentIndexChanged(int index);
+    void on_timer();
+    void on_btnHKFactoryReset_clicked();
+    void on_btnHKGetToken_clicked();
+    void on_btnHKFMNAGetNvData_clicked();
+    void on_btnHKFMNASetNvData_clicked();
+    void on_btnHKFMNAGetFacData_clicked();
+    void on_btnHKFMNASetFacData_clicked();
+    void on_btnHKFMNAEnable_clicked();
+    void on_btnHKFMNAPairingMode_clicked();
+    void on_btnHKFMNAMotionDetected_clicked();
+    void on_btnHKFMNAGetDevState_clicked();
+
+    // iAP2
+    void on_btniAPConnect_clicked();
+    void on_btniAPSDisconnect_clicked();
+    void on_btniAPSend_clicked();
+    void on_cbiAP2SendFile_clicked();
+    void on_btniAP2BrowseSend_clicked();
+    void on_cbiAPReceiveFile_clicked();
+    void on_btniAPBrowseReceive_clicked();
+    void on_btniAPRead_clicked();
+    void on_cbiAP2ThreadComplete();
+    void on_btniAP2ReadCert_clicked();
+    void on_btniAP2GenSign_clicked();
+
+    // audio sink
+    void on_btnAVSinkConnect_clicked();
+    void on_btnAvSinkDisconnect_clicked();
+    void on_btnAvSinkStart_clicked();
+    void on_btnAvSinkSuspend_clicked();
+
+    // Battery Client
+    void on_btnBATTCConnect_clicked(void);
+    void on_btnBATTCDisconnect_clicked(void);
+    void on_btnBATTCReadLevel_clicked(void);
+
+    // FindMe Locator
+    void on_btnFINDMELConnect_clicked(void);
+    void on_btnFINDMELDisconnect_clicked(void);
+    void on_cbFINDMELLevel_currentIndexChanged(int index);
+
+    // OPS
+    void on_btnOPSDisconnect_clicked();
+
+    // GATT DB
+    void on_btnAddPrimarySvc_clicked();
+    void on_btnAddSecondarySvc_clicked();
+    void on_btnAddIncSvc_clicked();
+    void on_btnAddChar_clicked();
+    void on_btnAddDesc_clicked();
+    void on_btnStartAdvertGATTDB_clicked();
+    void on_btnInitGATTDB_clicked();
+
+    // ANP (ANS)
+    void on_btnANSSetAlert_clicked();
+    void on_btnGenerateAlert_clicked();
+    void on_btnCancelAlert_clicked();
+    void on_listAlertCategories_itemClicked(QListWidgetItem *item);
+    void on_radioANSSetNewAlerts_clicked();
+    void on_radioANSSetUnreadAlerts_clicked();
+    // ANP (ANC)
+    void on_radioANCReadNewAlerts_clicked();
+    void on_radioANCReadUnreadAlerts_clicked();
+    void on_btnACSReadAlerts_clicked();
+    void on_listAlertCategoriesANC_itemClicked(QListWidgetItem *item);
+    void on_btnANCControlAlerts_clicked();
+    void on_btnANCEnableNewAlerts_clicked();
+    void on_btnANCUnreadAlerts_clicked();
+
+    // Demo
+
+    //LE COC
+    void on_btnLecocConnect_clicked();
+    void on_btnLecocDisconnect_clicked();
+    void on_btnLecocSend_clicked();
+    void on_cbLECOCThreadComplete();
+    void on_cbLecocReceiveFile_clicked();
+    void on_cbLecocSendFile_clicked();
+    void on_pushButtonLecocStartAdv_clicked();
+    void on_btnLecocBrowseSend_clicked();
+    void on_btnLecocBrowseReceive_clicked();
+    void on_lineEditLecocPsm_textChanged(const QString &arg1);
+
+    // LED Demo
+    void InitLED_Demo();
+    void on_horizontalSliderLEDbrightness_sliderMoved(int position);
+    void on_pushButtonLEDONOFF_clicked();
+
+    //OTP Client
+    void on_btnOTPClientConnect_clicked();
+    void on_btnOTPClientDisconnect_clicked();
+    void on_btnOTPClientBrowseFile_clicked();
+    void on_btnOTPClientUpgrade_clicked();
+    void on_cbOTPClientThreadComplete();
+
+    // MAP Client
+    void on_btnMceGetServices_clicked();
+    void on_btnMceConnect_clicked();
+    void on_btnMceDisconnect_clicked();
+    void on_cbMceFolderList_currentIndexChanged(const QString &text);
+    void on_listMceMessages_currentItemChanged(QListWidgetItem* item, QListWidgetItem* previous);
+    void on_btnMceDelete_clicked();
+    void on_btnMceReply_clicked();
+    void on_btnMceSend_clicked();
+    void on_btnMceRegNotif_clicked();
+    void on_btnMceMsgList_clicked();
+
+    UINT16 MapAddTlv(UINT8 *buf, UINT8 type, UINT8 *value, UINT8 value_len);
+    UINT8 *MapFindTlv(UINT8 *buf, UINT8 data_len, UINT8 type);
+    UINT16 MceSendMessageData(UINT16 mce_handle);
+    void MceResizeMessageWindows(bool larger);
+    void MceSendGetMessageListing(UINT16 mce_handle, UINT16 start_offset, UINT16 max_count);
+
+    //PANU
+    void on_btnPANUConnect_clicked();
+    void on_btnPANUDisconnect_clicked();
+
+    // Test
+    void on_btnTest_clicked();
+
+    //LE Audio
+    void le_audio_handle_update_media_player_list(uint8_t len, uint8_t *p_data);
+    void le_audio_handle_update_media_player_status(uint8_t *p_data);
+    void le_audio_handle_update_call_state(uint16_t conn_id, uint8_t *p_data);
+    void le_audio_handle_call_terminated(uint8_t *p_data);
+    void le_audio_handle_broadcast_stream_response_data(uint8_t *p_data);
+    void le_audio_handle_broadcast_stream_info(uint8_t *p_data, uint8_t len);
+    void le_audio_handle_broadcast_status_update(uint8_t *p_data);
+    void le_audio_handle_update_call_friendly_name(uint8_t *p_data);
+    void le_audio_handle_mics_aics_description(uint8_t *p_data);
+    void le_audio_handle_mics_mute_status(uint8_t *p_data);
+    void le_audio_handle_mics_aics_input_status(uint8_t *p_data);
+    void le_audio_handle_preset_record(uint8_t *p_data, uint8_t len);
+    void le_audio_handle_active_preset(uint8_t *p_data);
+    void le_audio_handle_mic_status(uint8_t *p_data);
+    void le_audio_handle_convo_stream_status(uint8_t *p_data);
+    void le_audio_handle_pacs_record(uint8_t *p_data);
+    void le_audio_pl_update_listed_audio_config(CBtDevice *p_device);
+    void le_audio_handle_csis_lock_state(uint8_t *p_data);
+    void le_audio_handle_device_appearance(uint8_t *p_data);
+
+    void le_audio_handle_connection();
+    void le_audio_handle_disconnection(uint8_t *p_data);
+
+    void HandleLEAudioRequestEvent(uint8_t *p_data, int len);
+    void HandleLEAudioStartEvent(uint8_t *p_data, int len);
+    void HandleLEAudioStopEvent(uint8_t *p_data, int len);
+    const char *get_name_for_val(const name_val_t *p_vals, int num_vals, int value, const char *def = "unknown");
+
+    // RAS
+    void on_btn_le_ras_start_adv_clicked();
+    void on_btn_le_ras_connect_clicked();
+    void on_btn_le_ras_set_cs_params_clicked();
+
+public:
+    Ui::MainWindow *ui;
+
+private slots:
+
+    void on_btnHelpTab_clicked();
+    void window_shown();
+    void on_btnBLEHIDSendKey_1_pressed();
+    void on_btnBLEHIDSendKey_1_released();
+    void on_btnBLEHIDSendKey_2_pressed();
+    void on_btnBLEHIDSendKey_2_released();
+    void on_btnBLEHIDSendKey_3_pressed();
+    void on_btnBLEHIDSendKey_3_released();
+    void on_btnBLEHIDSendKey_audio_pressed();
+    void on_btnBLEHIDSendKey_audio_released();
+    void on_btnBLEHIDSendKey_ir_pressed();
+    void on_btnBLEHIDSendKey_ir_released();
+    void on_btnBLEHIDSendKey_motion_pressed();
+    void on_btnBLEHIDSendKey_motion_released();
+    void on_btnBLEHIDSendKey_a_pressed();
+    void on_btnBLEHIDSendKey_a_released();
+    void on_btnBLEHIDSendKey_b_pressed();
+    void on_btnBLEHIDSendKey_b_released();
+    void on_btnBLEHIDSendKey_c_pressed();
+    void on_btnBLEHIDSendKey_c_released();
+    void on_cbBLEHIDDebug_currentIndexChanged(int index);
+    void on_btnBLEHIDSendKey_esc_pressed();
+    void on_btnBLEHIDSendKey_esc_released();
+    void on_btnBLEHIDSendKey_up_pressed();
+    void on_btnBLEHIDSendKey_up_released();
+    void on_btnBLEHIDSendKey_enter_pressed();
+    void on_btnBLEHIDSendKey_enter_released();
+    void on_btnBLEHIDSendKey_left_pressed();
+    void on_btnBLEHIDSendKey_left_released();
+    void on_btnBLEHIDSendKey_down_pressed();
+    void on_btnBLEHIDSendKey_down_released();
+    void on_btnBLEHIDSendKey_right_pressed();
+    void on_btnBLEHIDSendKey_right_released();
+    void on_cbBLEHIDHold_clicked();
+
+    //LE Audio
+    void on_btn_le_audio_startLeAdv_clicked();
+    void le_audio_handle_device_change(CBtDevice * pDev);
+    void on_btn_le_audio_connectToPeer_clicked();
+    // LE Audio Headset Media controls
+    void on_btn_le_audio_hs_setMediaPlayer_clicked();
+    void on_btn_le_audio_hs_playPause_clicked();
+    // LE Audio Headset Volume controls
+    void on_btn_le_audio_muteUnmute_clicked();
+    void on_btn_le_audio_volDown_clicked();
+    void on_btn_le_audio_volUp_clicked();
+    void on_btn_le_audio_absVol_clicked();
+    // LE Audio Headset Broadcast Sink
+    void on_btn_le_audio_hs_scan_bcastStreams_clicked();
+    void on_btn_le_audio_hs_bcast_get_Streams_clicked();
+    void on_btn_le_audio_hs_bcast_SyncToStream_clicked();
+    //LE Audio Headset Call Control
+    void on_btn_le_audio_hs_ccp_accept_retrieve_call_clicked();
+    void on_btn_le_audio_hs_ccp_reject_terminate_call_clicked();
+
+    // LE Audio Player Media controls
+    void on_btn_le_audio_pl_playPause_clicked();
+    void on_btn_le_audio_pl_media_findFile_clicked();
+
+    // LE Audio Player Call controls
+    void on_btn_le_audio_pl_simulateCall_clicked();
+    void on_btn_le_audio_pl_simulateHold_clicked();
+    void on_btn_le_audio_pl_ringtone_findFile_clicked();
+    // LE Audio Player Broadcast source
+    void on_btn_le_audio_pl_startBcast_clicked();
+    void on_btn_le_audio_pl_broadcast_findFile_clicked();
+    //LE Audio Player  Voice Assistant
+    void on_btn_le_audio_pl_startVoiceCapture_clicked();
+    //LE Audio Player  Bidir MIC
+    void on_btn_le_audio_pl_bidirmic_start_stop_clicked();
+
+    // LE Audio Broadcast Assistant
+    void on_btn_le_audio_ba_scan_bcastStreams_clicked();
+    void on_btn_le_audio_ba_addSource_clicked();
+    void on_btn_le_audio_ba_addSourceWithPast_clicked();
+    void on_btn_le_audio_ba_removeSource_clicked();
+
+    //LE Audio MICS Controls
+    void on_btn_le_audio_mics_mute_clicked();
+    void on_btn_le_audio_mics_aics_mute_clicked();
+    void on_btn_le_audio_inc_mics_aics_gain_clicked();
+    void on_btn_le_audio_dec_mics_aics_gain_clicked();
+    void on_btn_le_audio_set_mics_aics_gain_clicked();
+
+    //LE Audio HAP Controls
+    void on_btn_le_audio_pl_read_preset_clicked();
+    void on_btn_le_audio_pl_hap_set_active_preset_clicked();
+    void on_btn_le_audio_pl_hap_set_next_preset_clicked();
+    void on_btn_le_audio_pl_hap_set_previous_preset_clicked();
+    void on_btn_le_audio_pl_hap_set_preset_name_clicked();
+
+    void on_btn_le_audio_csis_lock_clicked();
+
+    //LE Audio Remote Control
+    void on_btn_le_audio_rc_playPause_clicked();
+    void on_btn_le_audio_rc_setMediaPlayer_clicked();
+    void on_btn_le_audio_rc_InitiateCall_clicked();
+    void on_btn_le_audio_rc_TerminateCall_clicked();
+
+	// BAS
+	void on_btnNumberMofiy_clicked();
+    void on_btnNumberSignal_clicked();
+    void on_btnBroadcastEnable_clicked();
+    void on_btnDisableBroadcast_clicked();
+    void on_btnNameModify_clicked();
+    void on_btnNameNotify_clicked();
+    void on_btnModelChange_clicked();
+    void on_btnModelSignal_clicked();
+    void on_btnLevelModify_clicked();
+    void on_btnLevelNotify_clicked();
+    void on_btnServicedateModify_clicked();
+    void on_btnServicedateNotify_clicked();
+    void on_btnHealthInfoModify_clicked();
+    void on_btnHealthInfoSignal_clicked();
+    void on_btnBatteryInfoModify_clicked();
+    void on_btnBatteryInfoSignal_clicked();
+    void on_btnEnergyStatusModify_clicked();
+    void on_btnEnergyStatusSignal_clicked();
+    void on_btnCriticalStatusSignal_clicked();
+    void on_btnCriticalStatusModify_clicked();
+    void on_btnTimeStatusModify_clicked();
+    void on_btnTimeStatusNotify_clicked();
+    void on_btnHealthStatusModify_clicked();
+    void on_btnHealthStatusSignal_clicked();
+    void on_btnBATTCAdvStart_clicked();
+    void on_cbCommport_activated(const QString &arg1);
+    void on_btnFindAudioRawFile_clicked();
+    void on_btnAudioRawFileSend_clicked();
+    void on_btnFindAudioRawFile_2_clicked();
+    void on_cbAudioSelect_activated(int index);
+    void on_btnBLEHIDSendKey_back_pressed();
+    void on_btnBLEHIDSendKey_back_released();
+    void on_btnBLEHIDSendKey_home_pressed();
+    void on_btnBLEHIDSendKey_home_released();
+    void on_btnBLEHIDSendKey_mute_pressed();
+    void on_btnBLEHIDSendKey_mute_released();
+    void on_audioPlayButton1_clicked();
+    void on_audioPlayButton2_clicked();
+    void on_audioRecordutton_pressed();
+    void on_audioRecordutton_released();
+    void on_ifxvh_record_button_pressed();
+    void on_ifxvh_record_button_released();
+    void on_ifxvh_play_button_pressed();
+    void on_ifxvh_browse_button_clicked();
+    void on_cbAlertLevel_activated(int index);
+    void on_btn_ull_save_clicked();
+    void on_comboBox_ull_rpt_type1_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type2_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type3_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type4_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type5_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type6_currentIndexChanged(int index);
+    void on_comboBox_ull_rpt_type7_currentIndexChanged(int index);
+    void on_btn_le_ras_start_cs_clicked();
+};
+
+// Thread for SPP, iAP2 and serial port read
+class Worker : public QObject
+ {
+     Q_OBJECT
+
+public:
+    explicit Worker() {m_pParent=NULL;}
+    ~Worker(){}
+
+    // Read serial port
+    DWORD Read(BYTE * lpBytes, DWORD dwLen);
+    DWORD ReadNewHciPacket(BYTE * pu8Buffer, int bufLen, int * pOffset);
+    MainWindow * m_pParent;
+#ifdef WIN32
+    QString str_ip_addr;
+    void set_ip_addr(QString str_cmd_ip_Addr);
+#endif
+
+ public slots:
+     void process_spp();
+     void process_bsg();
+     void process_iap2();
+     void read_serial_port_thread();
+     void process_lecoc();
+     void process_OTPClient();
+#ifdef WIN32
+     void read_script_thread();
+#endif
+
+private:
+     void dump_hci_data_hexa(const char *p_prefix, BYTE *pu8Buffer, DWORD dwLen);
+     void process_vse(BYTE *pu8Buffer, DWORD dwLen);
+
+ signals:
+     void finished();
+     void HandleWicedEvent(DWORD opcode, DWORD len, BYTE *p_data);
+
+ };
+
+class AudioFileWriter : public QThread
+{
+    Q_OBJECT
+
+public:
+    explicit AudioFileWriter(MainWindow * pParent);
+    ~AudioFileWriter() {}
+    MainWindow * m_pParent;
+    void SendNextData(hci_audio_sample_t * puHci, int bytesPerPacket);
+    BYTE* GetAudioDataDataChunk(BYTE *pWavData, DWORD dwWavDataLen, DWORD *pdwDataLen);
+    BYTE * ExecuteSetAudioFile(char *pcFileName);
+
+
+protected:
+    void run() Q_DECL_OVERRIDE;
+};
+extern bool m_bClosing ;
+extern MainWindow *g_pMainWindow;
+
+extern int get_bd_string(uint8_t *bdaddr, char *p_bdaddr_str, int str_len);
+
+#endif // MAINWINDOW_H

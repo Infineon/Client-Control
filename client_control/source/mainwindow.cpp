@@ -1,0 +1,780 @@
+/*
+ * (c) 2016-2026, Infineon Technologies AG, or an affiliate of Infineon
+ * Technologies AG. All rights reserved.
+ * This software, associated documentation and materials ("Software") is
+ * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
+ * and is protected by and subject to worldwide patent protection, worldwide
+ * copyright laws, and international treaty provisions. Therefore, you may use
+ * this Software only as provided in the license agreement accompanying the
+ * software package from which you obtained this Software. If no license
+ * agreement applies, then any use, reproduction, modification, translation, or
+ * compilation of this Software is prohibited without the express written
+ * permission of Infineon.
+ *
+ * Disclaimer: UNLESS OTHERWISE EXPRESSLY AGREED WITH INFINEON, THIS SOFTWARE
+ * IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * INCLUDING, BUT NOT LIMITED TO, ALL WARRANTIES OF NON-INFRINGEMENT OF
+ * THIRD-PARTY RIGHTS AND IMPLIED WARRANTIES SUCH AS WARRANTIES OF FITNESS FOR A
+ * SPECIFIC USE/PURPOSE OR MERCHANTABILITY.
+ * Infineon reserves the right to make changes to the Software without notice.
+ * You are responsible for properly designing, programming, and testing the
+ * functionality and safety of your intended application of the Software, as
+ * well as complying with any legal requirements related to its use. Infineon
+ * does not guarantee that the Software will be free from intrusion, data theft
+ * or loss, or other breaches ("Security Breaches"), and Infineon shall have
+ * no liability arising out of any Security Breaches. Unless otherwise
+ * explicitly approved by Infineon, the Software may not be used in any
+ * application where a failure of the Product or any consequences of the use
+ * thereof can reasonably be expected to result in personal injury.
+ */
+
+/*
+ * Sample MCU application for using WICED HCI protocol. Common main app.
+ */
+
+#include <QCloseEvent>
+#include "hci_control_api.h"
+#include <QDateTime>
+#include <QFileDialog>
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+#include <QTimer>
+#include <QTextStream>
+#include <QDebug>
+#include "wiced_types.h"
+
+extern void TraceHciPkt(BYTE type, BYTE *buffer, USHORT length, USHORT serial_port_index,int iSpyInstance);
+
+extern "C"
+{
+void app_host_init();
+
+int app_host_port_write(uint8_t *data, uint32_t len)
+{
+    return g_pMainWindow->PortWrite(data, len);
+}
+
+void app_host_log(const char * fmt, ...)
+{
+    va_list         vargs;
+    char            log_buffer[1024];
+
+    va_start(vargs, fmt);
+    vsprintf(log_buffer, fmt, vargs);
+    va_end(vargs);
+
+    g_pMainWindow->Log(log_buffer);
+}
+
+}  // extern "C"
+
+MainWindow *g_pMainWindow = NULL ;
+bool m_bClosing = false;
+
+class EventFilter : public QObject
+{
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+};
+
+bool EventFilter::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == g_pMainWindow->ui->tabDualA2DP && event->type() == QEvent::EnabledChange)
+    {
+        if (g_pMainWindow->ui->tabDualA2DP->isEnabled())
+        {
+            g_pMainWindow->m_audio_format = (g_pMainWindow->m_settings.value("AudioSrcFormatMp3DualA2DP", true).toBool()) ? 1 : 0;
+        }
+        else
+        {
+            g_pMainWindow->m_audio_format = (g_pMainWindow->m_settings.value("AudioSrcFormatMp3", true).toBool()) ? 1 : 0;
+        }
+    }
+    return true;
+}
+
+int MainWindow::ExtractCmdlineArgs(const QStringList &args)
+{
+    // parse command line args
+    // -c <port name>
+    // -b <baud rate>
+    // -s enable scripting
+    int num_args = args.count();
+    for(int i =1; i < num_args; i++)
+    {
+        QString str = args.at(i);
+
+        if (str == "-s")
+            this->scripting = true;
+
+        if(str == "-c")
+        {
+            this->str_cmd_port = args.at(i+1);
+        }
+        if(str == "-b")
+        {
+            this->str_cmd_baud = args.at(i+1);
+        }
+        if(str == "-i")
+        {
+            this->iSpyInstance = args.at(i+1).toInt();
+        }
+        if(str == "-ip")
+        {
+            if(args.at(i+1) != NULL && num_args > 2){
+                QStringList list = args.at(i + 1).split(":");
+                qDebug() << "List = %s"<< list;
+                foreach(QString item, list)
+                    qDebug() << "List items = " << item;
+
+                this->str_cmd_ip_addr = list[0];
+                if(list.length() > 1){
+                    this->cmd_ip_addr_port = list[1].toInt();
+                }
+            }else{
+                this->str_cmd_ip_addr = "127.0.0.1";
+            }
+            this->m_use_host_mode = true;
+        }
+    }
+
+    return 0;
+
+}
+
+// Initialize UI and variables
+MainWindow::MainWindow(QStringList args, QWidget *parent) :
+    QMainWindow(parent),
+    m_paired_icon(":/paired.png"),
+    m_settings("clientcontrol.ini",QSettings::IniFormat),
+    m_fp_logfile(NULL),
+    scripting(false),
+    ui(new Ui::MainWindow)
+{
+    m_use_host_mode = 0;
+    ExtractCmdlineArgs(args);
+
+    m_b_app_init = false;
+    app_host_init();
+    ui->setupUi(this);
+
+    qApp->setStyleSheet("QGroupBox {  border: 1px solid gray;}");
+
+    g_pMainWindow = this;
+
+    connect(ui->btnClear, SIGNAL(clicked()), this, SLOT(btnClearClicked()));
+    connect(ui->btnFindLogFile, SIGNAL(clicked()), this, SLOT(btnFindLogfileClicked()));
+    connect(ui->btnLogToFile, SIGNAL(clicked(bool)), this, SLOT(btnLogToFileClicked(bool)));
+    connect(ui->btnAddTrace, SIGNAL(clicked()), this, SLOT(btnAddTraceClicked()));
+
+    connect(this, SIGNAL(HandleWicedEvent(unsigned int,unsigned int,unsigned char*)), this, SLOT(onHandleWicedEvent(unsigned int,unsigned int ,unsigned char*)), Qt::QueuedConnection);
+    connect(this, SIGNAL(HandleTrace(QString*)), this, SLOT(processTrace(QString*)), Qt::QueuedConnection);
+    connect(this, SIGNAL(ScrollToTop()), this, SLOT(processScrollToTop()), Qt::QueuedConnection);
+    connect(this, SIGNAL(ListClear()), this, SLOT(processClear()), Qt::QueuedConnection);
+
+    qApp->setStyleSheet("QGroupBox {border: 1px solid gray; border-radius: 9px; margin-top: 0.5em;}");
+    qApp->setStyleSheet("QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px;}");
+
+    QIcon icon;
+    icon.addFile(":/bt.png");
+    if(!icon.isNull())
+    {
+        QApplication::setWindowIcon(icon);
+    }
+
+    // Initialize each profile/feature tab
+    InitDm();
+    InitAudioSrc();
+    InitAudioSrc_DualA2DP();
+    InitAVRCTG();
+    InitAudioSnk();
+    InitAVRCCT();
+    InitAG();
+    InitHF();
+    InitSPP();
+    InitIFXVH();
+    InitHIDH();
+    InitBLEHIDD();
+    InitGATT();
+    InitHK();
+    InitiAP2();
+    InitBSG();
+    InitPBC();
+    InitBATTC();
+    InitFINDMEL();
+    InitDemo();
+    InitOPS();
+    InitGATT_DB();
+    InitANP();
+    InitLecoc();
+    InitLED_Demo();
+    InitOTPClient();
+    InitMAPClient();
+    InitHciLoopbackTest();
+    InitPANU();
+    InitUnicastSink();
+    processClear();
+
+    ui->lstTrace->addItem("Instructions:");
+    ui->lstTrace->addItem("1.  Plug the AIROC(tm) Evaluation Board into the computer using a USB cable.");
+    ui->lstTrace->addItem("2.  Build and download an embedded application to the evaluation board.");
+    ui->lstTrace->addItem("3.  Select the serial (COM) port for the Evaluation Board and open the port.");
+    ui->lstTrace->addItem("    This is usually enumerated 'WICED HCI UART' on Windows or Linux PCs.");
+    ui->lstTrace->addItem("    The UI will be enabled when the Client Control app is able to communicate with the embedded Bluetooth app.");
+    ui->lstTrace->addItem("4.  For more information about this application, click on the help (?) icon.");
+
+   processScrollToTop();
+
+    // Tab index 22 and higher are not used currently, remove then from UI
+    for(int i = 0; i < 10; i++)
+        ui->tabMain->removeTab(22);
+
+    EventFilter *evtFilter = new EventFilter();
+    ui->tabDualA2DP->installEventFilter(evtFilter);
+    m_b_app_init = true;
+}
+
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
+
+// indication of app shutdown
+void MainWindow::closeEvent (QCloseEvent *event)
+{
+    printf("[%s] 1\n",__FUNCTION__);
+    closeEventDm(event);
+    event->accept();
+    printf("[%s] 2\n",__FUNCTION__);
+}
+
+void MainWindow::showEvent(QShowEvent *ev)
+{
+    QMainWindow::showEvent(ev);
+    QTimer::singleShot(500, this, SLOT(window_shown()));
+}
+
+// When window is shown, if COM port or baud rate is specified in command line,
+// use it to open the port
+void MainWindow::window_shown()
+{
+    if(!str_cmd_port.isEmpty() && !str_cmd_baud.isEmpty())
+    {
+        on_btnOpenPort_clicked();
+    }
+
+    if (scripting)
+        CreateScriptThread();
+}
+
+// Handle WICED HCI events
+void MainWindow::onHandleWicedEvent(unsigned int opcode, unsigned int len, unsigned char *p_data)
+{
+    // send event to modules, DM should be first
+    onHandleWicedEventDm(opcode,p_data,len);
+    onHandleWicedEventAudioSrc(opcode, p_data, len);
+    onHandleWicedEventAudioSrc_DualA2DP(opcode, p_data, len);
+    onHandleWicedEventLeAudio(opcode, p_data, len);
+    onHandleWicedEventHF(opcode, p_data, len);
+    onHandleWicedEventSPP(opcode, p_data, len);
+    onHandleWicedEventAG(opcode, p_data, len);
+    onHandleWicedEventBLEHIDD(opcode, p_data, len);
+    onHandleWicedEventHIDH(opcode, p_data, len);
+    onHandleWicedEventIFXVH(opcode, p_data, len);
+    onHandleWicedEventAVRCCT(opcode, p_data, len);
+    onHandleWicedEventAVRCTG(opcode, p_data, len);
+    onHandleWicedEventHK(opcode, p_data, len);
+    onHandleWicedEventiAP2(opcode, p_data, len);
+    onHandleWicedEventGATT(opcode, p_data, len);
+    onHandleWicedEventAudioSnk(opcode, p_data, len);
+    onHandleWicedEventBSG(opcode, p_data, len);
+    onHandleWicedEventPBC(opcode, p_data, len);
+    onHandleWicedEventBATTC(opcode, p_data, len);
+    onHandleWicedEventFINDMEL(opcode, p_data, len);
+    onHandleWicedEventDemo(opcode, p_data, len);
+    onHandleWicedEventOPS(opcode, p_data, len);
+    onHandleWicedEventGATT_DB(opcode, p_data, len);
+    onHandleWicedEventANP(opcode, p_data, len);
+    onHandleWicedEventLECOC(opcode, p_data, len);
+    onHandleWicedEventOTPClient(opcode, p_data, len);
+    onHandleWicedEventMAPClient(opcode, p_data, len);
+    onHandleWicedEventHciDfu(opcode, p_data, len);
+    onHandleWicedEventHciLoopback(opcode, p_data, len);
+    onHandleWicedEventPANU(opcode, p_data, len);
+    onHandleWicedEventRas(opcode, p_data, len);
+    // free event data, allocated in Dm module when event arrives
+    if (p_data)
+        free(p_data);
+}
+
+/*************** Tracing UI ************************/
+
+// Clear traces
+void MainWindow::onClear()
+{
+    ui->lstTrace->clear();
+}
+
+// add trace to window
+void MainWindow::processTrace(QString * trace)
+{
+    // Keep a max of 50 lines of traces in windows, otherwise
+    // it slows down the rendering.
+    if(ui->lstTrace->count() > 50)
+    {
+        QListWidgetItem *pRemove = ui->lstTrace->takeItem(0);
+        delete pRemove;
+    }
+
+    ui->lstTrace->addItem(*trace);
+    ui->lstTrace->scrollToBottom();
+    ui->lstTrace->scrollToItem(ui->lstTrace->item( ui->lstTrace->count()));
+
+    if (ui->btnLogToFile->isChecked() && m_fp_logfile)
+    {
+        fprintf(m_fp_logfile, "%s\n", trace->toStdString().c_str());
+        fflush(m_fp_logfile);
+    }
+
+    delete trace;
+}
+
+void MainWindow::processScrollToTop()
+{
+    ui->lstTrace->scrollToTop();
+}
+
+void MainWindow::processClear()
+{
+    ui->lstTrace->clear();
+}
+
+// common Log method to send traces to app UI
+void MainWindow::Log(const char * fmt, ...)
+{
+    // discard spurios traces in clientcontrol start up
+    if(!m_b_app_init)
+        return;
+
+    va_list cur_arg;
+    va_start(cur_arg, fmt);
+    char trace[1000];
+    memset(trace, 0, sizeof(trace));
+    vsprintf(trace, fmt, cur_arg);
+
+    // send to spy before the time stamp
+    TraceHciPkt(0, (BYTE *)trace, strlen(trace), 0, iSpyInstance);
+
+    QString s = QDateTime::currentDateTime().toString("MM-dd-yyyy hh:mm:ss.zzz: ") + trace;
+    va_end(cur_arg);
+
+    // add trace to file and UI screen in UI thread
+    emit HandleTrace(new QString(s));
+}
+
+// User button to clear traces
+void MainWindow::btnClearClicked()
+{
+    ui->lstTrace->clear();
+}
+
+// Log traces to file
+void MainWindow::btnFindLogfileClicked()
+{
+    QString fileName = QFileDialog::getSaveFileName(this,
+        tr("Log File"), "", tr("All Files (*.*)"));
+    ui->edLogFile->setText(fileName);
+}
+
+// Log to file
+void MainWindow::btnLogToFileClicked(bool checked)
+{
+    if (checked)
+    {
+        if (NULL == (m_fp_logfile = fopen(ui->edLogFile->text().toStdString().c_str(), "w")))
+        {
+            Log("Error opening logfile: %d", 0/*errno*/);
+            ui->btnLogToFile->setChecked(false);
+        }
+    }
+    else
+    {
+        // stop logging to file
+        if (m_fp_logfile)
+        {
+            fclose(m_fp_logfile);
+            m_fp_logfile = NULL;
+        }
+    }
+}
+
+// Add custom trace to app traces
+void MainWindow::btnAddTraceClicked()
+{
+    Log(ui->edTrace->text().toStdString().c_str());
+}
+
+/******************** Utility functions ***********************/
+USHORT MainWindow::GetHandle(QString &str)
+{
+    BYTE buf[2];
+    int num_digits = GetHexValue(buf, 2, str);
+    if (num_digits == 2)
+        return (buf[0] << 8) + buf[1];
+    else
+        return buf[0];
+}
+
+DWORD MainWindow::GetHexValue(LPBYTE buf, DWORD buf_size, QString &str)
+{
+    char szbuf[100];
+    char *psz = szbuf;
+    BYTE *pbuf = buf;
+    DWORD res = 0;
+
+    memset(buf, 0, buf_size);
+
+    strncpy(szbuf, str.toStdString().c_str(), 100);
+
+    if (strlen(szbuf) == 1)
+    {
+        szbuf[2] = 0;
+        szbuf[1] = szbuf[0];
+        szbuf[0] = '0';
+    }
+    else if (strlen(szbuf) == 3)
+    {
+        szbuf[4] = 0;
+        szbuf[3] = szbuf[2];
+        szbuf[2] = szbuf[1];
+        szbuf[1] = szbuf[0];
+        szbuf[0] = '0';
+    }
+    for (DWORD i = 0; i < strlen(szbuf); i++)
+    {
+        if (isxdigit(psz[i]) && isxdigit(psz[i + 1]))
+        {
+            *pbuf++ = (ProcNibble(psz[i]) << 4) + ProcNibble(psz[i + 1]);
+            res++;
+            i++;
+        }
+    }
+    return res;
+}
+
+BYTE MainWindow::ProcNibble (char n)
+{
+    if ((n >= '0') && (n <= '9'))
+    {
+        n -= '0';
+    }
+    else if ((n >= 'A') && (n <= 'F'))
+    {
+        n = ((n - 'A') + 10);
+    }
+    else if ((n >= 'a') && (n <= 'f'))
+    {
+        n = ((n - 'a') + 10);
+    }
+    else
+    {
+        n = (char)0xff;
+    }
+    return (n);
+}
+
+typedef struct {
+    uint8_t tag;
+    const char * desc;
+}tag_desc_t;
+
+const tag_desc_t tag_pairs[] = {
+    {0x01,"Flags"},
+    {0x02,"MORE UUID16"},
+    {0x03,"UUID16"},
+    {0x04,"MORE UUID32"},
+    {0x05,"UUID32"},
+    {0x06,"MORE UUID128"},
+    {0x07,"UUID128"},
+    {0x08,"Name(Short)"},
+    {0x09,"Name"},
+    {0x0A,"TxPower"},
+    {0x0C,"BdAddr"},
+    {0x0D,"COD"},
+    {0xFF,"Manufacturer"}
+};
+
+const char * GetTagDesc(BYTE tag)
+{
+    int i = sizeof(tag_pairs)/sizeof(tag_pairs[0]);
+    const tag_desc_t * p_tp = tag_pairs;
+
+    while(i--){
+        if(p_tp->tag == tag)
+            return p_tp->desc;
+        p_tp++;
+    }
+
+    return "";
+}
+
+
+DWORD MainWindow::qtmin(DWORD len, DWORD bufLen)
+{
+    return (len < bufLen) ? len : bufLen;
+}
+
+void MainWindow::DumpData(char *description, void* p, unsigned int length, unsigned int max_lines)
+{
+    char    buff[100];
+    unsigned int    i, j;
+    char    full_buff[3000];
+
+    if (p != NULL)
+    {
+        for (j = 0; j < max_lines && (32 * j) < length; j++)
+        {
+            for (i = 0; (i < 32) && ((i + (32 * j)) < length); i++)
+            {
+                sprintf(&buff[3 * i], "%02x \n", ((UINT8*)p)[i + (j * 32)]);
+            }
+            if (j == 0)
+            {
+                strncpy(full_buff, description, 3000-1);
+                strcat(full_buff, buff);
+                //qDebug(full_buff);
+            }
+            else
+            {
+                //qDebug(buff);
+            }
+        }
+    }
+}
+
+
+// returns device name if present in data
+void DecodeEIR_Hostmode(LPBYTE p_data, DWORD len, char * szName, int name_len)
+{
+    BYTE tag;
+    int tag_len=0;
+    int data_len = (int)len;
+
+    memset(szName, 0, name_len);
+ //   p_data++;
+    while (data_len >= 2)
+    {
+        tag_len = (int)(unsigned int)*p_data++;
+        tag = *p_data++;
+        if (tag == 8 || tag == 9)
+        {
+            if (tag_len < name_len-1)
+            {
+                strncpy(szName, (char*)p_data, tag_len-1);
+                if (g_pMainWindow)
+                    g_pMainWindow->Log("name = %s", szName);
+            }
+            return;
+        }
+        p_data += tag_len - 1;
+        data_len -= tag_len + 1;
+    }
+}
+
+void appendName(char * szName, int name_len, uint8_t *p_data, int tag_len )
+{
+    int nlen = strlen(szName);
+    int i;
+
+    if(name_len < (tag_len + 4)){
+        return;
+    }
+
+    if(nlen && name_len){
+        nlen += sprintf(&szName[nlen], "%c", '-');
+    }
+
+    nlen += sprintf(&szName[nlen], "%s", "#-");
+    //sprintf(&trace[strlen(trace)], "nameStr: ");
+    for (i = 0; i < tag_len; i++)
+    {
+        //sprintf(&trace[strlen(trace)], "%c", p_data[i]);
+        szName[nlen + i] = p_data[i];
+    }
+    szName[nlen +i] = 0;
+
+    return;
+}
+
+void MainWindow::DecodeEIR(LPBYTE p_data, DWORD len, char * szName, int name_len)
+{
+    char trace[1024] = {0};
+    //static char bd_name[100]={0};
+    BYTE tag;
+    int i;
+    int data_len = (int)len;
+
+    //szName[0]=0;
+    memset(szName, 0, name_len);
+    //trace[0] = '\0';
+    memset(trace, 0, 1024);
+    while (data_len >= 2)
+    {
+        int used = 0;
+        const int tag_len = (int)(unsigned int)*p_data++;
+        uint8_t *p_data_start = p_data;
+        tag = *p_data++;
+
+        //if(tag_len > data_len){
+        //    break;
+        //}
+
+        used += sprintf(trace + used, " -Tag: 0x%02x-(%s) :",tag,GetTagDesc(tag));
+        //GetTagDesc(trace, tag);
+        //used += sprintf(trace + used, ":");
+        switch (tag)
+        {
+        case 0x02: // UUID16 More
+        case 0x03: // UUID16
+            unsigned short uuid16;
+
+            for (i = 0; i < tag_len - 1; i += 2)
+            {
+                uuid16 = *p_data++;
+                uuid16 |= (*p_data++ << 8);
+                used += sprintf(trace + used, "%04X ", (uint32_t) uuid16);
+            }
+            break;
+
+        case 0x04: // UUID32 More
+        case 0x05: // UUID32
+
+            unsigned long uuid32;
+            for (i = 0; i < tag_len - 1; i += 2)
+            {
+                uuid32 = *(char *)p_data++;
+                uuid32 |= (*(char *)p_data++ << 8);
+                uuid32 |= (*(char *)p_data++ << 16);
+                uuid32 |= (*(char *)p_data++ << 24);
+                used += sprintf(trace + used, "%08X ", (uint32_t) uuid32);
+            }
+            break;
+
+        case 0x08: // Shortened name
+        case 0x09: // Name
+            for (i = 0; i < tag_len - 1; i++)
+            {
+                if (i < (name_len-1))
+                    szName[i] = *p_data;
+                used += sprintf(trace + used, "%c", *p_data++);
+            }
+            break;
+        case 0xff:
+        {
+            uint16_t vendor_id;
+            STREAM_TO_UINT16(vendor_id, p_data);
+
+            sprintf(&trace[strlen(trace)], "vendor id : 0x%04x ", vendor_id);
+
+            if(vendor_id == 0x0006){
+                uint8_t beacon_id, sub_scenario,rsvd_byte;
+
+                STREAM_TO_UINT8(beacon_id , p_data) ;
+                STREAM_TO_UINT8(sub_scenario , p_data);
+                STREAM_TO_UINT8(rsvd_byte , p_data);
+
+                if((beacon_id != 0x03)||(rsvd_byte != 0x80)){
+                    break;
+                }
+                switch(sub_scenario){
+                case 0:
+                {
+                    appendName(szName, name_len, p_data,tag_len - 6);
+                }
+                break;
+                case 2:
+                    appendName(szName, name_len, p_data + 3,tag_len - 6 -3);
+                    break;
+                case 1:
+                    appendName(szName, name_len, p_data + 6 + 3,tag_len - 6 - 6 - 3);
+                    break;
+                }
+            }
+            sprintf(&trace[strlen(trace)], "VendorD: ");
+            for (i = 0; i < tag_len - 1; i++)
+                sprintf(&trace[strlen(trace)], "%02X ", *p_data++);
+        }break;
+
+        default:
+
+            for (i = 0; i < tag_len - 1; i++)
+                used += sprintf(trace + used, "%02X ", *p_data++);
+            break;
+        }
+        data_len -= tag_len + 1;
+
+        Log(trace);
+        p_data = p_data_start + tag_len;
+    }
+}
+
+void MainWindow::DumpMemory(BYTE * p_buf, int length)
+{
+    char trace[1024];
+    int i;
+
+    memset(trace, 0, sizeof(trace));
+    for (i = 0; i < length; i++)
+    {
+        sprintf(&trace[strlen(trace)], "%02X ", p_buf[i + 3]);
+        if (i && (i % 32) == 0)
+        {
+            Log(trace);
+            memset(trace, 0, sizeof(trace));
+        }
+    }
+    if (i % 32)
+    {
+        Log(trace);
+    }
+}
+
+#ifdef Q_OS_MAC
+void MainWindow::HandleHidHAudioStart(LPBYTE p_data, DWORD len) {}
+void MainWindow::HandleHidHAudioStop(LPBYTE p_data, DWORD len) {}
+void MainWindow::HandleHidHAudioRxData(LPBYTE p_data, DWORD len) {}
+#endif
+
+void MainWindow::on_btnHelpTab_clicked()
+{
+    onClear();
+    QFile inputFile("../README.txt");
+    if (inputFile.open(QIODevice::ReadOnly))
+    {
+       QTextStream in(&inputFile);
+       while (!in.atEnd())
+       {
+          QString line = in.readLine();
+          ui->lstTrace->addItem(line);
+       }
+       inputFile.close();
+       processScrollToTop();
+    }
+    else
+    {
+        ui->lstTrace->addItem("See README.txt file in ClientControl folder.");
+    }
+}
+
+void MainWindow::on_cbCommport_activated(const QString &arg1)
+{
+    bool bEnable = 1;
+
+    if(arg1 != QString("host-mode"))
+    {
+        bEnable = 0;
+    }
+
+    ui->devPortNum->setEnabled(bEnable);
+    ui->ip_addr->setEnabled(bEnable);
+}

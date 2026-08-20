@@ -1,0 +1,182 @@
+/*
+ * (c) 2016-2026, Infineon Technologies AG, or an affiliate of Infineon
+ * Technologies AG. All rights reserved.
+ * This software, associated documentation and materials ("Software") is
+ * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
+ * and is protected by and subject to worldwide patent protection, worldwide
+ * copyright laws, and international treaty provisions. Therefore, you may use
+ * this Software only as provided in the license agreement accompanying the
+ * software package from which you obtained this Software. If no license
+ * agreement applies, then any use, reproduction, modification, translation, or
+ * compilation of this Software is prohibited without the express written
+ * permission of Infineon.
+ *
+ * Disclaimer: UNLESS OTHERWISE EXPRESSLY AGREED WITH INFINEON, THIS SOFTWARE
+ * IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * INCLUDING, BUT NOT LIMITED TO, ALL WARRANTIES OF NON-INFRINGEMENT OF
+ * THIRD-PARTY RIGHTS AND IMPLIED WARRANTIES SUCH AS WARRANTIES OF FITNESS FOR A
+ * SPECIFIC USE/PURPOSE OR MERCHANTABILITY.
+ * Infineon reserves the right to make changes to the Software without notice.
+ * You are responsible for properly designing, programming, and testing the
+ * functionality and safety of your intended application of the Software, as
+ * well as complying with any legal requirements related to its use. Infineon
+ * does not guarantee that the Software will be free from intrusion, data theft
+ * or loss, or other breaches ("Security Breaches"), and Infineon shall have
+ * no liability arising out of any Security Breaches. Unless otherwise
+ * explicitly approved by Infineon, the Software may not be used in any
+ * application where a failure of the Product or any consequences of the use
+ * thereof can reasonably be expected to result in personal injury.
+ */
+
+
+#include "app_include.h"
+
+extern MainWindow *g_pMainWindow;
+
+extern "C"
+{
+#include "app_host_panu.h"
+}
+
+
+// Initialize app
+void MainWindow::InitPANU()
+{
+    g_pMainWindow = this;
+    ui->btnPANUConnect->setEnabled(true);
+    ui->btnPANUDisconnect->setEnabled(false);
+
+    app_host_panu_init();
+}
+
+// Connect to peer with SPP connection
+void MainWindow::on_btnPANUConnect_clicked()
+{
+    if (m_CommPort == NULL)
+        return;
+
+    if (!m_bPortOpen)
+    {
+        return;
+    }
+
+    CBtDevice * pDev =(CBtDevice *)GetSelectedDevice();
+    if (NULL == pDev)
+        return;
+
+    if(pDev->m_panu_handle != NULL_HANDLE)
+    {
+        Log("PANU already connected for selected device");
+        return;
+    }
+
+    app_host_panu_connect(pDev->m_address);
+}
+
+void MainWindow::on_btnPANUDisconnect_clicked()
+{
+    CBtDevice * pDev = GetConnectedPANUDevice();
+    if (pDev == NULL)
+        return;
+
+    app_host_panu_disconnect(pDev->m_address);
+}
+
+// Handle WICED HCI events
+void MainWindow::onHandleWicedEventPANU(unsigned int opcode, unsigned char *p_data, unsigned int len)
+{
+    //app_host_panu_event(opcode, p_data, len);
+    switch (HCI_CONTROL_GROUP(opcode))
+    {
+    case HCI_CONTROL_GROUP_PANU:
+        HandlePANUEvents(opcode, p_data, len);
+        break;
+    }
+}
+
+// Handle WICED HCI events for SPP
+void MainWindow::HandlePANUEvents(DWORD opcode, LPBYTE p_data, DWORD len)
+{
+    CBtDevice *device;
+    BYTE bda[6];
+    uint16_t  handle;
+
+    app_host_panu_event(opcode, p_data, len);
+    switch (opcode)
+    {
+    case HCI_CONTROL_PANU_EVENT_CONNECTED:
+        for (int i = 0; i < 6; i++)
+            bda[5 - i] = p_data[i];
+
+        // find device in the list with received address and save the connection handle
+        if ((device = FindInList(bda,ui->cbDeviceList)) == NULL)
+            device = AddDeviceToList(bda, ui->cbDeviceList, NULL);
+
+
+        handle = p_data[12] + (p_data[13] << 8);
+        device->m_panu_handle = handle;
+        device->m_conn_type |= CONNECTION_TYPE_PANU;
+
+        SelectDevice(ui->cbDeviceList, bda);
+        Log("PANU connected");
+        ui->btnPANUConnect->setEnabled(false);
+        ui->btnPANUDisconnect->setEnabled(true);
+        break;
+    case HCI_CONTROL_PANU_EVENT_SERVICE_NOT_FOUND:
+        handle = p_data[0] | (p_data[1] << 8);
+        Log("PANU Service not found, Handle: 0x%04x", handle);
+        device = FindInList(CONNECTION_TYPE_PANU, handle, ui->cbDeviceList);
+        if (device && (device->m_panu_handle == handle))
+        {
+            device->m_panu_handle = NULL_HANDLE;
+            device->m_conn_type &= ~CONNECTION_TYPE_PANU;
+        }
+        ui->btnPANUConnect->setEnabled(true);
+        ui->btnPANUDisconnect->setEnabled(false);
+        break;
+    case HCI_CONTROL_PANU_EVENT_CONNECTION_FAILED:
+        handle = p_data[0] | (p_data[1] << 8);
+        Log("PANU Connection Failed, Handle: 0x%04x", handle);
+        device = FindInList(CONNECTION_TYPE_PANU, handle, ui->cbDeviceList);
+        if (device && (device->m_panu_handle == handle))
+        {
+            device->m_panu_handle = NULL_HANDLE;
+            device->m_conn_type &= ~CONNECTION_TYPE_PANU;
+        }
+        ui->btnPANUConnect->setEnabled(true);
+        ui->btnPANUDisconnect->setEnabled(false);
+        break;
+    case HCI_CONTROL_PANU_EVENT_DISCONNECTED:
+        handle = p_data[0] | (p_data[1] << 8);
+        Log("PANU disconnected, Handle: 0x%04x", handle);
+        device = FindInList(CONNECTION_TYPE_PANU, handle, ui->cbDeviceList);
+        if (device && (device->m_panu_handle == handle))
+        {
+            device->m_panu_handle = NULL_HANDLE;
+            device->m_conn_type &= ~CONNECTION_TYPE_PANU;
+        }
+        ui->btnPANUConnect->setEnabled(true);
+        ui->btnPANUDisconnect->setEnabled(false);
+        break;
+    default:
+        break;
+    }
+}
+
+CBtDevice* MainWindow::GetConnectedPANUDevice()
+{
+    CBtDevice * pDev = GetSelectedDevice();
+    if (pDev == NULL)
+    {
+        Log("No device selected");
+        return NULL;
+    }
+
+    if(pDev->m_panu_handle == NULL_HANDLE)
+    {
+        Log("Selected device is not connected as PANU");
+        return NULL;
+    }
+
+    return pDev;
+}
